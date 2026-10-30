@@ -8,6 +8,11 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.os.Bundle
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
+import android.media.Image
+import com.google.ar.core.TrackingState
+import kotlin.math.*
 import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -23,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var glView: GLSurfaceView
     private lateinit var status: TextView
     private var session: Session? = null
+    private var renderer: DepthRenderer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,7 +41,31 @@ class MainActivity : Activity() {
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
-            setRenderer(DepthRenderer { msg -> runOnUiThread { status.text = msg } })
+            val depthRenderer = DepthRenderer { msg -> runOnUiThread { status.text = msg } }
+            renderer = depthRenderer
+            setRenderer(depthRenderer)
+            val pinch = ScaleGestureDetector(this@MainActivity, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    depthRenderer.zoom = (depthRenderer.zoom / detector.scaleFactor).coerceIn(0.3f, 15f)
+                    return true
+                }
+            })
+            var px = 0f
+            var py = 0f
+            setOnTouchListener { _, event ->
+                pinch.onTouchEvent(event)
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { px = event.x; py = event.y }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (event.pointerCount == 1 && !pinch.isInProgress) {
+                            depthRenderer.yaw += (event.x - px) * 0.35f
+                            depthRenderer.pitch = (depthRenderer.pitch + (event.y - py) * 0.35f).coerceIn(-89f, 89f)
+                        }
+                        px = event.x; py = event.y
+                    }
+                }
+                true
+            }
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
         val layout = FrameLayout(this)
@@ -83,16 +113,27 @@ class MainActivity : Activity() {
     }
 
     inner class DepthRenderer(private val report: (String) -> Unit) : GLSurfaceView.Renderer {
+        @Volatile var yaw = 0f
+        @Volatile var pitch = 15f
+        @Volatile var zoom = 2.5f
         private var program = 0
         private var texture = 0
         private var width = 1
         private var height = 1
         private var lastReport = 0L
         private val projection = FloatArray(16)
-        private val vertices = ByteBuffer.allocateDirect(100000 * 3 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        private val view = FloatArray(16)
+        private val mvp = FloatArray(16)
+        private val vertices = ByteBuffer.allocateDirect(100000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        // Quantized global voxel map, bounded to avoid unlimited memory use.
+        private val voxels = LinkedHashMap<Long, FloatArray>()
+        private val maxPoints = 80000
+        private var origin: FloatArray? = null
+        private var frameNumber = 0
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
             GLES20.glClearColor(0.025f, 0.035f, 0.06f, 1f)
+            GLES20.glEnable(GLES20.GL_DEPTH_TEST)
             val textures = IntArray(1)
             GLES20.glGenTextures(1, textures, 0)
             texture = textures[0]
@@ -100,8 +141,8 @@ class MainActivity : Activity() {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
             program = link(
-                "attribute vec3 aPosition; uniform mat4 uProjection; varying float vDepth; void main(){gl_Position=uProjection*vec4(aPosition,1.0);gl_PointSize=2.5;vDepth=-aPosition.z;}",
-                "precision mediump float; varying float vDepth; void main(){float t=clamp(vDepth/5.0,0.0,1.0);gl_FragColor=vec4(0.25+0.55*t,0.85-0.4*t,1.0-t*0.25,1.0);}"
+                "attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uMvp; varying vec3 vColor; void main(){gl_Position=uMvp*vec4(aPosition,1.0);gl_PointSize=3.0;vColor=aColor;}",
+                "precision mediump float; varying vec3 vColor; void main(){gl_FragColor=vec4(vColor,1.0);}"
             )
         }
         override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -116,55 +157,111 @@ class MainActivity : Activity() {
                 s.setDisplayGeometry(0, width, height)
                 val frame = s.update()
                 val camera = frame.camera
-                camera.getProjectionMatrix(projection, 0, 0.05f, 30f)
-                val image = try { frame.acquireRawDepthImage16Bits() } catch (_: Exception) { return }
-                var count = 0
-                image.use { depth ->
-                    val intrinsics = camera.textureIntrinsics
-                    val focal = intrinsics.focalLength
-                    val principal = intrinsics.principalPoint
-                    val dims = intrinsics.imageDimensions
-                    val sx = depth.width.toFloat() / dims[0]
-                    val sy = depth.height.toFloat() / dims[1]
-                    val fx = focal[0] * sx
-                    val fy = focal[1] * sy
-                    val cx = principal[0] * sx
-                    val cy = principal[1] * sy
-                    val plane = depth.planes[0]
-                    val bytes = plane.buffer.order(ByteOrder.nativeOrder())
-                    vertices.clear()
-                    val stride = plane.rowStride
-                    val pixelStride = plane.pixelStride
-                    for (y in 0 until depth.height step 2) {
-                        for (x in 0 until depth.width step 2) {
-                            if (count >= 100000) break
-                            val offset = y * stride + x * pixelStride
-                            val millimeters = bytes.getShort(offset).toInt() and 0xffff
-                            if (millimeters == 0 || millimeters > 10000) continue
-                            val z = millimeters / 1000f
-                            vertices.put((x - cx) * z / fx)
-                            vertices.put(-(y - cy) * z / fy)
-                            vertices.put(-z)
-                            count++
-                        }
+                if (camera.trackingState != TrackingState.TRACKING) return
+                frameNumber++
+                // Capture at a lower cadence to keep GPU rendering responsive.
+                if (frameNumber % 3 == 0) {
+                    val depth = try { frame.acquireRawDepthImage16Bits() } catch (_: Exception) { null }
+                    if (depth != null) {
+                        val color = try { frame.acquireCameraImage() } catch (_: Exception) { null }
+                        try {
+                            val intr = camera.textureIntrinsics
+                            val focal = intr.focalLength
+                            val principal = intr.principalPoint
+                            val dims = intr.imageDimensions
+                            val sx = depth.width.toFloat() / dims[0]
+                            val sy = depth.height.toFloat() / dims[1]
+                            val fx = focal[0] * sx
+                            val fy = focal[1] * sy
+                            val cx = principal[0] * sx
+                            val cy = principal[1] * sy
+                            val plane = depth.planes[0]
+                            val bytes = plane.buffer.order(ByteOrder.nativeOrder())
+                            val pose = camera.pose
+                            if (origin == null) origin = pose.translation.clone()
+                            val base = origin!!
+                            for (y in 0 until depth.height step 3) {
+                                for (x in 0 until depth.width step 3) {
+                                    val offset = y * plane.rowStride + x * plane.pixelStride
+                                    val mm = bytes.getShort(offset).toInt() and 0xffff
+                                    if (mm < 150 || mm > 8000) continue
+                                    val z = mm / 1000f
+                                    val local = floatArrayOf((x-cx)*z/fx, -(y-cy)*z/fy, -z)
+                                    val world = pose.transformPoint(local)
+                                    val xx = world[0]-base[0]; val yy = world[1]-base[1]; val zz = world[2]-base[2]
+                                    val ix = floor(xx / 0.025f).toInt()
+                                    val iy = floor(yy / 0.025f).toInt()
+                                    val iz = floor(zz / 0.025f).toInt()
+                                    val key = ((ix.toLong() and 0x1fffffL) shl 42) or
+                                        ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
+                                    val rgb = sampleYuv(color, x, y, depth.width, depth.height)
+                                    if (!voxels.containsKey(key) && voxels.size >= maxPoints) {
+                                        val it = voxels.keys.iterator()
+                                        if (it.hasNext()) { it.next(); it.remove() }
+                                    }
+                                    voxels[key] = floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2])
+                                }
+                            }
+                        } finally { color?.close(); depth.close() }
                     }
                 }
+                vertices.clear()
+                for (p in voxels.values) vertices.put(p)
+                val count = vertices.position() / 6
                 if (count > 0) {
                     vertices.flip()
+                    Matrix.perspectiveM(projection, 0, 60f, width.toFloat()/height, 0.05f, 100f)
+                    val a = Math.toRadians(yaw.toDouble())
+                    val b = Math.toRadians(pitch.toDouble())
+                    val cx = (zoom * cos(b) * sin(a)).toFloat()
+                    val cy = (zoom * sin(b)).toFloat()
+                    val cz = (zoom * cos(b) * cos(a)).toFloat()
+                    Matrix.setLookAtM(view, 0, cx, cy, cz, 0f, 0f, -1.5f, 0f, 1f, 0f)
+                    Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
                     GLES20.glUseProgram(program)
-                    GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uProjection"), 1, false, projection, 0)
+                    GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uMvp"), 1, false, mvp, 0)
                     val pos = GLES20.glGetAttribLocation(program, "aPosition")
+                    val col = GLES20.glGetAttribLocation(program, "aColor")
                     GLES20.glEnableVertexAttribArray(pos)
-                    GLES20.glVertexAttribPointer(pos, 3, GLES20.GL_FLOAT, false, 0, vertices)
+                    GLES20.glEnableVertexAttribArray(col)
+                    vertices.position(0)
+                    GLES20.glVertexAttribPointer(pos, 3, GLES20.GL_FLOAT, false, 24, vertices)
+                    vertices.position(3)
+                    GLES20.glVertexAttribPointer(col, 3, GLES20.GL_FLOAT, false, 24, vertices)
                     GLES20.glDrawArrays(GLES20.GL_POINTS, 0, count)
                     GLES20.glDisableVertexAttribArray(pos)
+                    GLES20.glDisableVertexAttribArray(col)
                 }
                 val now = System.currentTimeMillis()
-                if (now - lastReport > 1000) { report("Live depth · $count points · ${camera.trackingState}"); lastReport = now }
+                if (now - lastReport > 1000) {
+                    report("Live 3D · $count points · TRACKING · drag orbit / pinch zoom")
+                    lastReport = now
+                }
             } catch (e: Exception) {
                 val now = System.currentTimeMillis()
                 if (now - lastReport > 1000) { report("Capture: ${e.message}"); lastReport = now }
             }
+        }
+
+        // CPU YUV_420_888 sampling. Approximate depth/image alignment for prototype;
+        // exact geometric reprojection and color calibration are planned next.
+        private fun sampleYuv(image: Image?, x: Int, y: Int, dw: Int, dh: Int): FloatArray {
+            if (image == null) return floatArrayOf(0.4f, 0.8f, 1f)
+            val px = (x.toLong() * image.width / dw).toInt().coerceIn(0, image.width-1)
+            val py = (y.toLong() * image.height / dh).toInt().coerceIn(0, image.height-1)
+            fun read(i: Int, xx: Int, yy: Int): Int {
+                val p = image.planes[i]
+                val offset = yy * p.rowStride + xx * p.pixelStride
+                return p.buffer.get(offset).toInt() and 255
+            }
+            val yy = read(0, px, py)
+            val u = read(1, px/2, py/2)-128
+            val v = read(2, px/2, py/2)-128
+            return floatArrayOf(
+                ((yy + 1.402f*v)/255f).coerceIn(0f,1f),
+                ((yy - 0.344136f*u - 0.714136f*v)/255f).coerceIn(0f,1f),
+                ((yy + 1.772f*u)/255f).coerceIn(0f,1f)
+            )
         }
         private fun shader(type: Int, source: String): Int {
             val id = GLES20.glCreateShader(type)
