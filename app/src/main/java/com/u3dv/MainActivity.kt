@@ -238,7 +238,7 @@ class MainActivity : Activity() {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
             program = link(
-                "attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uMvp; varying vec3 vColor; void main(){gl_Position=uMvp*vec4(aPosition,1.0);gl_PointSize=3.0;vColor=aColor;}",
+                "attribute vec3 aPosition; attribute vec3 aColor; uniform mat4 uMvp; varying vec3 vColor; void main(){gl_Position=uMvp*vec4(aPosition,1.0);gl_PointSize=4.5;vColor=aColor;}",
                 "precision mediump float; varying vec3 vColor; void main(){gl_FragColor=vec4(vColor,1.0);}"
             )
         }
@@ -280,8 +280,8 @@ class MainActivity : Activity() {
                             val pose = camera.pose
                             if (origin == null) origin = pose.translation.clone()
                             val base = origin!!
-                            for (y in 2 until depth.height - 2 step 3) {
-                                for (x in 2 until depth.width - 2 step 3) {
+                            for (y in 2 until depth.height - 2 step 2) {
+                                for (x in 2 until depth.width - 2 step 2) {
                                     val offset = y * plane.rowStride + x * plane.pixelStride
                                     val mm = bytes.getShort(offset).toInt() and 0xffff
                                     if (mm < 200 || mm > 5000) { rejected++; continue }
@@ -289,12 +289,12 @@ class MainActivity : Activity() {
                                     for ((dx, dy) in arrayOf(-2 to 0, 2 to 0, 0 to -2, 0 to 2)) {
                                         val offset2 = (y + dy) * plane.rowStride + (x + dx) * plane.pixelStride
                                         val neighbor = bytes.getShort(offset2).toInt() and 0xffff
-                                        if (neighbor in 200..5000 && abs(neighbor - mm) <= 100) consistent++
+                                        if (neighbor in 200..5000 && abs(neighbor - mm) <= 150) consistent++
                                     }
-                                    if (consistent < 3) { rejected++; continue }
+                                    if (consistent < 2) { rejected++; continue }
                                     if (confidencePlane != null && confidenceBuffer != null) {
                                         val ci = y * confidencePlane.rowStride + x * confidencePlane.pixelStride
-                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < 160) {
+                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < 120) {
                                             rejected++; continue
                                         }
                                     }
