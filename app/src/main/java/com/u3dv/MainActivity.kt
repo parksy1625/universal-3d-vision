@@ -16,6 +16,9 @@ import kotlin.math.*
 import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
+import android.widget.Button
+import android.widget.ScrollView
+import android.app.AlertDialog
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import java.nio.ByteBuffer
@@ -71,6 +74,16 @@ class MainActivity : Activity() {
         val layout = FrameLayout(this)
         layout.addView(glView)
         layout.addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        val inventoryButton = Button(this).apply {
+            text = "Cameras"
+            setOnClickListener {
+                val info = try { CameraInventory.describe(this@MainActivity) } catch (e: Exception) { "Camera discovery failed: ${e.message}" }
+                val label = TextView(this@MainActivity).apply { text = info; setPadding(24, 20, 24, 20); setTextIsSelectable(true) }
+                val scroll = ScrollView(this@MainActivity).apply { addView(label) }
+                AlertDialog.Builder(this@MainActivity).setTitle("Camera capabilities").setView(scroll).setPositiveButton("Close", null).show()
+            }
+        }
+        layout.addView(inventoryButton, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END))
         setContentView(layout)
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
