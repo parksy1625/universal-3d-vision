@@ -63,6 +63,10 @@ class MainActivity : Activity() {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> { px = event.x; py = event.y }
                     MotionEvent.ACTION_MOVE -> {
+                        if (event.pointerCount == 2 && !pinch.isInProgress) {
+                            depthRenderer.panX -= (event.x - px) * depthRenderer.zoom / glView.width.coerceAtLeast(1)
+                            depthRenderer.panY += (event.y - py) * depthRenderer.zoom / glView.height.coerceAtLeast(1)
+                        }
                         if (event.pointerCount == 1 && !pinch.isInProgress) {
                             depthRenderer.yaw += (event.x - px) * 0.35f
                             depthRenderer.pitch = (depthRenderer.pitch + (event.y - py) * 0.35f).coerceIn(-89f, 89f)
@@ -104,6 +108,19 @@ class MainActivity : Activity() {
         val modeParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
         modeParams.topMargin = (68 * resources.displayMetrics.density).toInt()
         layout.addView(modeButton, modeParams)
+        val resetButton = Button(this).apply {
+            text = "Reset view"
+            setOnClickListener {
+                depthRenderer.yaw = 0f
+                depthRenderer.pitch = 15f
+                depthRenderer.zoom = 2.5f
+                depthRenderer.panX = 0f
+                depthRenderer.panY = 0f
+            }
+        }
+        val resetParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
+        resetParams.topMargin = (68 * resources.displayMetrics.density).toInt()
+        layout.addView(resetButton, resetParams)
         val exportButton = Button(this).apply {
             text = "Save PLY"
             setOnClickListener {
