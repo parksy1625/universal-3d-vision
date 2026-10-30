@@ -144,10 +144,10 @@ class MainActivity : Activity() {
         private val projection = FloatArray(16)
         private val view = FloatArray(16)
         private val mvp = FloatArray(16)
-        private val vertices = ByteBuffer.allocateDirect(100000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        private val vertices = ByteBuffer.allocateDirect(240000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
-        private val maxPoints = 80000
+        private val maxPoints = 240000
         private var accepted = 0
         private var rejected = 0
         private var origin: FloatArray? = null
@@ -205,11 +205,18 @@ class MainActivity : Activity() {
                             val pose = camera.pose
                             if (origin == null) origin = pose.translation.clone()
                             val base = origin!!
-                            for (y in 0 until depth.height step 3) {
-                                for (x in 0 until depth.width step 3) {
+                            for (y in 2 until depth.height - 2 step 3) {
+                                for (x in 2 until depth.width - 2 step 3) {
                                     val offset = y * plane.rowStride + x * plane.pixelStride
                                     val mm = bytes.getShort(offset).toInt() and 0xffff
                                     if (mm < 200 || mm > 5000) { rejected++; continue }
+                                    var consistent = 0
+                                    for ((dx, dy) in arrayOf(-2 to 0, 2 to 0, 0 to -2, 0 to 2)) {
+                                        val offset2 = (y + dy) * plane.rowStride + (x + dx) * plane.pixelStride
+                                        val neighbor = bytes.getShort(offset2).toInt() and 0xffff
+                                        if (neighbor in 200..5000 && abs(neighbor - mm) <= 100) consistent++
+                                    }
+                                    if (consistent < 3) { rejected++; continue }
                                     if (confidencePlane != null && confidenceBuffer != null) {
                                         val ci = y * confidencePlane.rowStride + x * confidencePlane.pixelStride
                                         if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < 160) {
@@ -227,10 +234,7 @@ class MainActivity : Activity() {
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
                                     val rgb = sampleYuv(color, x, y, depth.width, depth.height)
                                     accepted++
-                                    if (!voxels.containsKey(key) && voxels.size >= maxPoints) {
-                                        val it = voxels.keys.iterator()
-                                        if (it.hasNext()) { it.next(); it.remove() }
-                                    }
+                                    if (!voxels.containsKey(key) && voxels.size >= maxPoints) { rejected++; continue }
                                     val old = voxels[key]
                                     if (old == null) {
                                         voxels[key] = floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2], 1f)
