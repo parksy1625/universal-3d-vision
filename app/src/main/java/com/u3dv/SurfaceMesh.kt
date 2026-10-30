@@ -16,7 +16,7 @@ object SurfaceMesh {
         return sqrt(dx*dx+dy*dy+dz*dz)
     }
     /** Bounded live triangle buffer, 6 floats per vertex (position + RGB). */
-    fun liveTriangles(points: List<FloatArray>, maxTriangles: Int = 45000): FloatArray {
+    fun liveTriangles(points: List<FloatArray>, maxTriangles: Int = 120000): FloatArray {
         val cells = HashMap<Long, Int>(points.size * 2)
         points.forEachIndexed { i,p ->
             if (p[6] >= 2f) cells[key(floor(p[0]/CELL).toInt(),floor(p[1]/CELL).toInt(),floor(p[2]/CELL).toInt())] = i
@@ -32,7 +32,10 @@ object SurfaceMesh {
             if (cursor + 18 > out.size) return
             for (p in arrayOf(a,b,c)) for (i in 0..5) out[cursor++] = p[i]
         }
-        for (p in points) {
+        // Rotate sampling start across updates to avoid permanently starving late-scanned areas.
+        val stride = (points.size / 90000).coerceAtLeast(1)
+        for (index in points.indices step stride) {
+            val p = points[index]
             if (cursor + 36 > out.size) break
             if (p[6] < 2f) continue
             val x=floor(p[0]/CELL).toInt()
