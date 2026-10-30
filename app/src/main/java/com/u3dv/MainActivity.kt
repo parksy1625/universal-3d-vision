@@ -128,6 +128,8 @@ class MainActivity : Activity() {
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
         private val maxPoints = 80000
+        private var accepted = 0
+        private var rejected = 0
         private var origin: FloatArray? = null
         private var frameNumber = 0
 
@@ -164,8 +166,9 @@ class MainActivity : Activity() {
                     val depth = try { frame.acquireRawDepthImage16Bits() } catch (_: Exception) { null }
                     if (depth != null) {
                         val color = try { frame.acquireCameraImage() } catch (_: Exception) { null }
+                        val confidence = try { frame.acquireRawDepthConfidenceImage() } catch (_: Exception) { null }
                         try {
-                            val intr = camera.textureIntrinsics
+                            val intr = camera.imageIntrinsics
                             val focal = intr.focalLength
                             val principal = intr.principalPoint
                             val dims = intr.imageDimensions
@@ -175,6 +178,8 @@ class MainActivity : Activity() {
                             val fy = focal[1] * sy
                             val cx = principal[0] * sx
                             val cy = principal[1] * sy
+                            val confidencePlane = confidence?.planes?.get(0)
+                            val confidenceBuffer = confidencePlane?.buffer
                             val plane = depth.planes[0]
                             val bytes = plane.buffer.order(ByteOrder.nativeOrder())
                             val pose = camera.pose
@@ -184,7 +189,13 @@ class MainActivity : Activity() {
                                 for (x in 0 until depth.width step 3) {
                                     val offset = y * plane.rowStride + x * plane.pixelStride
                                     val mm = bytes.getShort(offset).toInt() and 0xffff
-                                    if (mm < 150 || mm > 8000) continue
+                                    if (mm < 200 || mm > 5000) { rejected++; continue }
+                                    if (confidencePlane != null && confidenceBuffer != null) {
+                                        val ci = y * confidencePlane.rowStride + x * confidencePlane.pixelStride
+                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < 160) {
+                                            rejected++; continue
+                                        }
+                                    }
                                     val z = mm / 1000f
                                     val local = floatArrayOf((x-cx)*z/fx, -(y-cy)*z/fy, -z)
                                     val world = pose.transformPoint(local)
@@ -195,18 +206,27 @@ class MainActivity : Activity() {
                                     val key = ((ix.toLong() and 0x1fffffL) shl 42) or
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
                                     val rgb = sampleYuv(color, x, y, depth.width, depth.height)
+                                    accepted++
                                     if (!voxels.containsKey(key) && voxels.size >= maxPoints) {
                                         val it = voxels.keys.iterator()
                                         if (it.hasNext()) { it.next(); it.remove() }
                                     }
-                                    voxels[key] = floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2])
+                                    val old = voxels[key]
+                                    if (old == null) {
+                                        voxels[key] = floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2], 1f)
+                                    } else {
+                                        val n = old[6].coerceAtMost(12f)
+                                        val alpha = 1f / (n + 1f)
+                                        for (j in 0..5) old[j] += (floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2])[j] - old[j]) * alpha
+                                        old[6] = (n + 1f).coerceAtMost(12f)
+                                    }
                                 }
                             }
-                        } finally { color?.close(); depth.close() }
+                        } finally { confidence?.close(); color?.close(); depth.close() }
                     }
                 }
                 vertices.clear()
-                for (p in voxels.values) vertices.put(p)
+                for (p in voxels.values) vertices.put(p, 0, 6)
                 val count = vertices.position() / 6
                 if (count > 0) {
                     vertices.flip()
@@ -234,7 +254,7 @@ class MainActivity : Activity() {
                 }
                 val now = System.currentTimeMillis()
                 if (now - lastReport > 1000) {
-                    report("Live 3D · $count points · TRACKING · drag orbit / pinch zoom")
+                    report("3D · $count voxels · accepted $accepted / filtered $rejected · orbit / zoom")
                     lastReport = now
                 }
             } catch (e: Exception) {
