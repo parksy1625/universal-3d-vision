@@ -12,6 +12,8 @@ import android.os.Bundle
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.media.Image
+import android.content.ContentValues
+import android.provider.MediaStore
 import com.google.ar.core.TrackingState
 import kotlin.math.*
 import android.view.Gravity
@@ -91,6 +93,35 @@ class MainActivity : Activity() {
         }
         val testParams = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START)
         layout.addView(physicalButton, testParams)
+        val exportButton = Button(this).apply {
+            text = "Save PLY"
+            setOnClickListener {
+                glView.queueEvent {
+                    val points = renderer?.snapshot() ?: emptyList()
+                    Thread {
+                        try {
+                            val values = ContentValues().apply {
+                                put(MediaStore.Downloads.DISPLAY_NAME, "u3dv_" + System.currentTimeMillis() + ".ply")
+                                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                                put(MediaStore.Downloads.RELATIVE_PATH, "Download/U3DV")
+                            }
+                            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                                ?: throw IllegalStateException("Unable to create file")
+                            contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
+                                writer.write("ply\nformat ascii 1.0\nelement vertex " + points.size + "\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
+                                for (p in points) {
+                                    writer.write("${p[0]} ${p[1]} ${p[2]} ${(p[3]*255).toInt().coerceIn(0,255)} ${(p[4]*255).toInt().coerceIn(0,255)} ${(p[5]*255).toInt().coerceIn(0,255)}\n")
+                                }
+                            } ?: throw IllegalStateException("Unable to write file")
+                            runOnUiThread { status.text = "Saved " + points.size + " points to Downloads/U3DV" }
+                        } catch (e: Exception) {
+                            runOnUiThread { status.text = "Save failed: " + e.message }
+                        }
+                    }.start()
+                }
+            }
+        }
+        layout.addView(exportButton, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         setContentView(layout)
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
@@ -148,6 +179,7 @@ class MainActivity : Activity() {
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
         private val maxPoints = 240000
+        fun snapshot(): List<FloatArray> = voxels.values.map { it.copyOf() }
         private var accepted = 0
         private var rejected = 0
         private var origin: FloatArray? = null
