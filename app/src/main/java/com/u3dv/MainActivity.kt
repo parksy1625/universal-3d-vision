@@ -207,7 +207,7 @@ class MainActivity : Activity() {
         @Volatile var pitch = 15f
         @Volatile var zoom = 2.5f
         @Volatile var showMesh = true
-        private val meshBuffer = ByteBuffer.allocateDirect(45000 * 3 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        private val meshBuffer = ByteBuffer.allocateDirect(120000 * 3 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         private var meshVertices = 0
         private var lastMeshUpdate = 0L
         private var program = 0
