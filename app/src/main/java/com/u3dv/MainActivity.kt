@@ -111,11 +111,11 @@ class MainActivity : Activity() {
         val resetButton = Button(this).apply {
             text = "Reset view"
             setOnClickListener {
-                depthRenderer.yaw = 0f
-                depthRenderer.pitch = 15f
-                depthRenderer.zoom = 2.5f
-                depthRenderer.panX = 0f
-                depthRenderer.panY = 0f
+                renderer?.yaw = 0f
+                renderer?.pitch = 15f
+                renderer?.zoom = 2.5f
+                renderer?.panX = 0f
+                renderer?.panY = 0f
             }
         }
         val resetParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
