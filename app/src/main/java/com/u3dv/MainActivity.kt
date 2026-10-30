@@ -221,7 +221,7 @@ class MainActivity : Activity() {
         private val vertices = ByteBuffer.allocateDirect(240000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
-        private val maxPoints = 240000
+        private val maxPoints = 2400000
         fun snapshot(): List<FloatArray> = voxels.values.map { it.copyOf() }
         private var accepted = 0
         private var rejected = 0
@@ -333,7 +333,11 @@ class MainActivity : Activity() {
                     lastMeshUpdate = meshNow
                 }
                 vertices.clear()
-                for (p in voxels.values) vertices.put(p, 0, 6)
+                val renderStride = (voxels.size / 240000).coerceAtLeast(1)
+                var renderIndex = 0
+                for (p in voxels.values) {
+                    if (renderIndex++ % renderStride == 0 && vertices.remaining() >= 6) vertices.put(p, 0, 6)
+                }
                 val count = vertices.position() / 6
                 if (count > 0) {
                     vertices.flip()
