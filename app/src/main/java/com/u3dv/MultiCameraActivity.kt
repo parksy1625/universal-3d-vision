@@ -2,6 +2,8 @@ package com.u3dv
 
 import android.app.Activity
 import android.hardware.camera2.*
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
 import android.os.Bundle
 import android.os.Handler
