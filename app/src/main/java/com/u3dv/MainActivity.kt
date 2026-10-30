@@ -206,6 +206,11 @@ class MainActivity : Activity() {
         @Volatile var yaw = 0f
         @Volatile var pitch = 15f
         @Volatile var zoom = 2.5f
+        @Volatile var panX = 0f
+        @Volatile var panY = 0f
+        @Volatile var centerX = 0f
+        @Volatile var centerY = 0f
+        @Volatile var centerZ = -1.5f
         @Volatile var showMesh = true
         private val meshBuffer = ByteBuffer.allocateDirect(120000 * 3 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         private var meshVertices = 0
@@ -339,6 +344,20 @@ class MainActivity : Activity() {
                     if (renderIndex++ % renderStride == 0 && vertices.remaining() >= 6) vertices.put(p, 0, 6)
                 }
                 val count = vertices.position() / 6
+                if (count > 0 && frameNumber % 45 == 0) {
+                    var minX = Float.POSITIVE_INFINITY; var maxX = Float.NEGATIVE_INFINITY
+                    var minY = Float.POSITIVE_INFINITY; var maxY = Float.NEGATIVE_INFINITY
+                    var minZ = Float.POSITIVE_INFINITY; var maxZ = Float.NEGATIVE_INFINITY
+                    for (p in voxels.values) {
+                        minX = min(minX, p[0]); maxX = max(maxX, p[0])
+                        minY = min(minY, p[1]); maxY = max(maxY, p[1])
+                        minZ = min(minZ, p[2]); maxZ = max(maxZ, p[2])
+                    }
+                    val tx = (minX + maxX) * 0.5f; val ty = (minY + maxY) * 0.5f; val tz = (minZ + maxZ) * 0.5f
+                    centerX += (tx - centerX) * 0.12f
+                    centerY += (ty - centerY) * 0.12f
+                    centerZ += (tz - centerZ) * 0.12f
+                }
                 if (count > 0) {
                     vertices.flip()
                     Matrix.perspectiveM(projection, 0, 60f, width.toFloat()/height, 0.05f, 100f)
@@ -347,7 +366,7 @@ class MainActivity : Activity() {
                     val cx = (zoom * cos(b) * sin(a)).toFloat()
                     val cy = (zoom * sin(b)).toFloat()
                     val cz = (zoom * cos(b) * cos(a)).toFloat()
-                    Matrix.setLookAtM(view, 0, cx, cy, cz, 0f, 0f, -1.5f, 0f, 1f, 0f)
+                    Matrix.setLookAtM(view, 0, centerX + panX + cx, centerY + panY + cy, centerZ + cz, centerX + panX, centerY + panY, centerZ, 0f, 1f, 0f)
                     Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
                     GLES20.glUseProgram(program)
                     GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uMvp"), 1, false, mvp, 0)
