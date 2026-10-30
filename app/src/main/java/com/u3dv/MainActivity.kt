@@ -122,6 +122,34 @@ class MainActivity : Activity() {
             }
         }
         layout.addView(exportButton, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        val meshButton = Button(this).apply {
+            text = "Save OBJ"
+            setOnClickListener {
+                glView.queueEvent {
+                    val points = renderer?.snapshot() ?: emptyList()
+                    Thread {
+                        try {
+                            val values = ContentValues().apply {
+                                put(MediaStore.Downloads.DISPLAY_NAME, "u3dv_mesh_" + System.currentTimeMillis() + ".obj")
+                                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                                put(MediaStore.Downloads.RELATIVE_PATH, "Download/U3DV")
+                            }
+                            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                                ?: throw IllegalStateException("Unable to create OBJ")
+                            val faces = contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
+                                SurfaceMesh.writeObj(points, writer)
+                            } ?: throw IllegalStateException("Unable to write OBJ")
+                            runOnUiThread { status.text = "Saved OBJ: " + points.size + " vertices, " + faces + " triangles" }
+                        } catch (e: Exception) {
+                            runOnUiThread { status.text = "OBJ failed: " + e.message }
+                        }
+                    }.start()
+                }
+            }
+        }
+        val meshParams = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+        meshParams.bottomMargin = (56 * resources.displayMetrics.density).toInt()
+        layout.addView(meshButton, meshParams)
         setContentView(layout)
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
@@ -264,7 +292,7 @@ class MainActivity : Activity() {
                                     val iz = floor(zz / 0.025f).toInt()
                                     val key = ((ix.toLong() and 0x1fffffL) shl 42) or
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
-                                    val rgb = sampleYuv(color, x, y, depth.width, depth.height)
+                                    val rgb = sampleYuv(color, local, focal, principal, dims)
                                     accepted++
                                     if (!voxels.containsKey(key) && voxels.size >= maxPoints) { rejected++; continue }
                                     val old = voxels[key]
@@ -319,24 +347,32 @@ class MainActivity : Activity() {
             }
         }
 
-        // CPU YUV_420_888 sampling. Approximate depth/image alignment for prototype;
-        // exact geometric reprojection and color calibration are planned next.
-        private fun sampleYuv(image: Image?, x: Int, y: Int, dw: Int, dh: Int): FloatArray {
+        // Project the depth-derived camera-space ray using ARCore CPU image intrinsics.
+        // The CPU image and raw depth may have different dimensions/crops; this is
+        // a calibrated pinhole projection, not full lens-distortion correction.
+        private fun sampleYuv(image: Image?, local: FloatArray, focal: FloatArray,
+                              principal: FloatArray, dims: IntArray): FloatArray {
             if (image == null) return floatArrayOf(0.4f, 0.8f, 1f)
-            val px = (x.toLong() * image.width / dw).toInt().coerceIn(0, image.width-1)
-            val py = (y.toLong() * image.height / dh).toInt().coerceIn(0, image.height-1)
+            val z = -local[2]
+            if (z <= 0f) return floatArrayOf(0.4f, 0.8f, 1f)
+            val u = (local[0] / z * focal[0] + principal[0]) * image.width / dims[0]
+            val v = (-local[1] / z * focal[1] + principal[1]) * image.height / dims[1]
+            if (!u.isFinite() || !v.isFinite() || u < 0 || v < 0 ||
+                u >= image.width || v >= image.height) return floatArrayOf(0.4f, 0.8f, 1f)
+            val px = u.toInt()
+            val py = v.toInt()
             fun read(i: Int, xx: Int, yy: Int): Int {
                 val p = image.planes[i]
                 val offset = yy * p.rowStride + xx * p.pixelStride
                 return p.buffer.get(offset).toInt() and 255
             }
             val yy = read(0, px, py)
-            val u = read(1, px/2, py/2)-128
-            val v = read(2, px/2, py/2)-128
+            val cb = read(1, px/2, py/2)-128
+            val cr = read(2, px/2, py/2)-128
             return floatArrayOf(
-                ((yy + 1.402f*v)/255f).coerceIn(0f,1f),
-                ((yy - 0.344136f*u - 0.714136f*v)/255f).coerceIn(0f,1f),
-                ((yy + 1.772f*u)/255f).coerceIn(0f,1f)
+                ((yy + 1.402f*cr)/255f).coerceIn(0f,1f),
+                ((yy - 0.344136f*cb - 0.714136f*cr)/255f).coerceIn(0f,1f),
+                ((yy + 1.772f*cb)/255f).coerceIn(0f,1f)
             )
         }
         private fun shader(type: Int, source: String): Int {
