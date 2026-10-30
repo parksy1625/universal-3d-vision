@@ -15,6 +15,47 @@ object SurfaceMesh {
         val dx=a[0]-b[0]; val dy=a[1]-b[1]; val dz=a[2]-b[2]
         return sqrt(dx*dx+dy*dy+dz*dz)
     }
+    /** Bounded live triangle buffer, 6 floats per vertex (position + RGB). */
+    fun liveTriangles(points: List<FloatArray>, maxTriangles: Int = 45000): FloatArray {
+        val cells = HashMap<Long, Int>(points.size * 2)
+        points.forEachIndexed { i,p ->
+            if (p[6] >= 2f) cells[key(floor(p[0]/CELL).toInt(),floor(p[1]/CELL).toInt(),floor(p[2]/CELL).toInt())] = i
+        }
+        val out = FloatArray(maxTriangles * 3 * 6)
+        var cursor = 0
+        val axes = arrayOf(
+            arrayOf(intArrayOf(1,0,0), intArrayOf(0,1,0)),
+            arrayOf(intArrayOf(1,0,0), intArrayOf(0,0,1)),
+            arrayOf(intArrayOf(0,1,0), intArrayOf(0,0,1))
+        )
+        fun emit(a: FloatArray,b: FloatArray,c: FloatArray) {
+            if (cursor + 18 > out.size) return
+            for (p in arrayOf(a,b,c)) for (i in 0..5) out[cursor++] = p[i]
+        }
+        for (p in points) {
+            if (cursor + 36 > out.size) break
+            if (p[6] < 2f) continue
+            val x=floor(p[0]/CELL).toInt()
+            val y=floor(p[1]/CELL).toInt()
+            val z=floor(p[2]/CELL).toInt()
+            for (axis in axes) {
+                val a=axis[0]; val b=axis[1]
+                val j=cells[key(x+a[0],y+a[1],z+a[2])] ?: continue
+                val k=cells[key(x+b[0],y+b[1],z+b[2])] ?: continue
+                val pj=points[j]; val pk=points[k]
+                if (distance(p,pj) > 0.055f || distance(p,pk) > 0.055f ||
+                    distance(pj,pk) > 0.075f) continue
+                emit(p,pj,pk)
+                val l=cells[key(x+a[0]+b[0],y+a[1]+b[1],z+a[2]+b[2])]
+                if (l != null) {
+                    val pl=points[l]
+                    if (distance(pl,pj) < 0.055f && distance(pl,pk) < 0.055f) emit(pj,pl,pk)
+                }
+            }
+        }
+        return out.copyOf(cursor)
+    }
+
     fun writeObj(points: List<FloatArray>, writer: Writer): Int {
         val cells = HashMap<Long, Int>(points.size * 2)
         points.forEachIndexed { i,p ->
