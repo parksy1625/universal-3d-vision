@@ -2,6 +2,7 @@ package com.u3dv
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
@@ -84,6 +85,12 @@ class MainActivity : Activity() {
             }
         }
         layout.addView(inventoryButton, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END))
+        val physicalButton = Button(this).apply {
+            text = "Multi-camera test"
+            setOnClickListener { startActivity(Intent(this@MainActivity, MultiCameraActivity::class.java)) }
+        }
+        val testParams = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START)
+        layout.addView(physicalButton, testParams)
         setContentView(layout)
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
