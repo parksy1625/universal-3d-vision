@@ -93,6 +93,17 @@ class MainActivity : Activity() {
         }
         val testParams = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START)
         layout.addView(physicalButton, testParams)
+        val modeButton = Button(this).apply {
+            text = "View: Mesh"
+            setOnClickListener {
+                val mesh = !(renderer?.showMesh ?: true)
+                renderer?.showMesh = mesh
+                text = if (mesh) "View: Mesh" else "View: Points"
+            }
+        }
+        val modeParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
+        modeParams.topMargin = (68 * resources.displayMetrics.density).toInt()
+        layout.addView(modeButton, modeParams)
         val exportButton = Button(this).apply {
             text = "Save PLY"
             setOnClickListener {
@@ -195,6 +206,10 @@ class MainActivity : Activity() {
         @Volatile var yaw = 0f
         @Volatile var pitch = 15f
         @Volatile var zoom = 2.5f
+        @Volatile var showMesh = true
+        private val meshBuffer = ByteBuffer.allocateDirect(45000 * 3 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        private var meshVertices = 0
+        private var lastMeshUpdate = 0L
         private var program = 0
         private var texture = 0
         private var width = 1
@@ -309,6 +324,14 @@ class MainActivity : Activity() {
                         } finally { confidence?.close(); color?.close(); depth.close() }
                     }
                 }
+                val meshNow = System.currentTimeMillis()
+                if (showMesh && meshNow - lastMeshUpdate > 1800) {
+                    val data = SurfaceMesh.liveTriangles(voxels.values.toList())
+                    meshBuffer.clear()
+                    meshBuffer.put(data)
+                    meshVertices = data.size / 6
+                    lastMeshUpdate = meshNow
+                }
                 vertices.clear()
                 for (p in voxels.values) vertices.put(p, 0, 6)
                 val count = vertices.position() / 6
@@ -328,17 +351,19 @@ class MainActivity : Activity() {
                     val col = GLES20.glGetAttribLocation(program, "aColor")
                     GLES20.glEnableVertexAttribArray(pos)
                     GLES20.glEnableVertexAttribArray(col)
-                    vertices.position(0)
-                    GLES20.glVertexAttribPointer(pos, 3, GLES20.GL_FLOAT, false, 24, vertices)
-                    vertices.position(3)
-                    GLES20.glVertexAttribPointer(col, 3, GLES20.GL_FLOAT, false, 24, vertices)
-                    GLES20.glDrawArrays(GLES20.GL_POINTS, 0, count)
+                    val useMesh = showMesh && meshVertices > 0
+                    val active = if (useMesh) meshBuffer else vertices
+                    active.position(0)
+                    GLES20.glVertexAttribPointer(pos, 3, GLES20.GL_FLOAT, false, 24, active)
+                    active.position(3)
+                    GLES20.glVertexAttribPointer(col, 3, GLES20.GL_FLOAT, false, 24, active)
+                    GLES20.glDrawArrays(if (useMesh) GLES20.GL_TRIANGLES else GLES20.GL_POINTS, 0, if (useMesh) meshVertices else count)
                     GLES20.glDisableVertexAttribArray(pos)
                     GLES20.glDisableVertexAttribArray(col)
                 }
                 val now = System.currentTimeMillis()
                 if (now - lastReport > 1000) {
-                    report("3D · $count voxels · accepted $accepted / filtered $rejected · orbit / zoom")
+                    report("3D · $count voxels · ${if (showMesh) "mesh ${meshVertices/3} triangles" else "points"} · accepted $accepted / filtered $rejected")
                     lastReport = now
                 }
             } catch (e: Exception) {
