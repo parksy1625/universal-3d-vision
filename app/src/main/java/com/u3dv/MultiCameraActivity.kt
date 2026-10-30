@@ -40,6 +40,9 @@ class MultiCameraActivity : Activity() {
     private val views = mutableMapOf<String, ImageView>()
     private val timestamps = ConcurrentHashMap<String, Long>()
     private val calibration = mutableMapOf<String, String>()
+    private val samples = mutableMapOf<String, ArrayDeque<StereoDiagnostics.Sample>>()
+    private var stereoStatus = "Waiting for matched frames"
+    private var pairedCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,6 +95,9 @@ class MultiCameraActivity : Activity() {
             timestamps.clear()
             views.clear()
             calibration.clear()
+            samples.clear()
+            stereoStatus = "Waiting for matched frames"
+            pairedCount = 0
             previews.removeAllViews()
             val configs = mutableListOf<OutputConfiguration>()
             for (physicalId in selectedIds) {
@@ -135,12 +141,29 @@ class MultiCameraActivity : Activity() {
                             val plane = image.planes[0]
                             val data = plane.buffer
                             val pixels = IntArray(160 * 120)
+                            val gray = ByteArray(160 * 120)
                             for (yy in 0 until 120) {
                                 val sy = yy * h / 120
                                 for (xx in 0 until 160) {
                                     val sx = xx * w / 160
                                     val y = data.get(sy * plane.rowStride + sx * plane.pixelStride).toInt() and 255
                                     pixels[yy * 160 + xx] = android.graphics.Color.rgb(y, y, y)
+                                    gray[yy * 160 + xx] = y.toByte()
+                                }
+                            }
+                            val queue = samples.getOrPut(physicalId) { ArrayDeque() }
+                            queue.addLast(StereoDiagnostics.Sample(image.timestamp, gray))
+                            while (queue.size > 5) queue.removeFirst()
+                            if (physicalId == "5") {
+                                val other = samples["2"]
+                                val closest = other?.minByOrNull { kotlin.math.abs(it.timestampNs - image.timestamp) }
+                                if (closest != null) {
+                                    val deltaMs = kotlin.math.abs(closest.timestampNs - image.timestamp) / 1_000_000.0
+                                    if (deltaMs <= 40.0) {
+                                        val result = StereoDiagnostics.compare(closest.gray, gray)
+                                        pairedCount++
+                                        stereoStatus = "2/5 pairs=$pairedCount dt=${"%.2f".format(deltaMs)}ms matches=${result.matches} shift=(${"%.1f".format(result.meanShiftX)}, ${"%.1f".format(result.meanShiftY)})"
+                                    } else stereoStatus = "2/5 closest dt=${"%.2f".format(deltaMs)}ms (too far)"
                                 }
                             }
                             val bitmap = Bitmap.createBitmap(pixels, 160, 120, Bitmap.Config.ARGB_8888)
@@ -179,7 +202,7 @@ class MultiCameraActivity : Activity() {
                                                 val ts = timestamps.values.toList()
                                                 val spread = if (ts.size >= 2) (ts.maxOrNull()!! - ts.minOrNull()!!) / 1_000_000.0 else -1.0
                                                 val details = calibration.entries.joinToString("\n") { (id, value) -> "[$id] $value" }
-                                                output.text = "Logical $selected\n$stats\nLatest timestamp spread: ${"%.2f".format(spread)} ms (not paired frames)\n$lastError\n$details"
+                                                output.text = "Logical $selected\n$stats\n$stereoStatus\nLatest timestamp spread: ${"%.2f".format(spread)} ms (not paired frames)\nExperimental correspondences, NOT metric depth.\n$lastError\n$details"
                                                 output.postDelayed(this, 1000)
                                             }
                                         }, 1000)
