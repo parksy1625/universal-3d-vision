@@ -243,6 +243,7 @@ class MainActivity : Activity() {
         private val vertices = ByteBuffer.allocateDirect(240000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
+        private val tsdf = TsdfVolume()
         private val maxPoints = 600000
         private val meshExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
         @Volatile private var pendingMesh: FloatArray? = null
@@ -308,6 +309,7 @@ class MainActivity : Activity() {
                             val pose = camera.pose
                             if (origin == null) origin = pose.translation.clone()
                             val base = origin!!
+                            val cameraOrigin = floatArrayOf(pose.tx()-base[0], pose.ty()-base[1], pose.tz()-base[2])
                             for (y in 2 until depth.height - 2 step 2) {
                                 for (x in 2 until depth.width - 2 step 2) {
                                     val offset = y * plane.rowStride + x * plane.pixelStride
@@ -337,6 +339,13 @@ class MainActivity : Activity() {
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
                                     val rgb = sampleYuv(color, local, focal, principal, dims)
                                     accepted++
+                                    // Sparse TSDF fusion on a reduced sampling grid to bound CPU work.
+                                    if (x % 4 == 0 && y % 4 == 0) {
+                                        val conf = if (confidencePlane != null && confidenceBuffer != null)
+                                            ((confidenceBuffer.get(y * confidencePlane.rowStride + x * confidencePlane.pixelStride).toInt() and 255) / 255f)
+                                        else 0.65f
+                                        tsdf.integrate(cameraOrigin, floatArrayOf(xx,yy,zz), rgb, conf)
+                                    }
                                     if (!voxels.containsKey(key) && voxels.size >= maxPoints) { rejected++; continue }
                                     val old = voxels[key]
                                     if (old == null) {
@@ -358,12 +367,16 @@ class MainActivity : Activity() {
                 if (showMesh && !meshBusy && meshNow - lastMeshUpdate > 2500) {
                     lastMeshUpdate = meshNow
                     meshBusy = true
+                    val tsdfSamples = tsdf.snapshot()
                     val sample = ArrayList<FloatArray>()
                     val stride = (voxels.size / 150000).coerceAtLeast(1)
                     var i = 0
                     for (p in voxels.values) if (i++ % stride == 0) sample.add(p.copyOf())
                     meshExecutor.execute {
-                        try { pendingMesh = SurfaceMesh.liveTriangles(sample) }
+                        try {
+                            val surface = TsdfVolume.polygonize(tsdfSamples)
+                            pendingMesh = if (surface.isNotEmpty()) surface else SurfaceMesh.liveTriangles(sample)
+                        }
                         finally { meshBusy = false }
                     }
                 }
@@ -427,7 +440,7 @@ class MainActivity : Activity() {
                 }
                 val now = System.currentTimeMillis()
                 if (now - lastReport > 1000) {
-                    report("3D · $count voxels · ${if (showMesh) "mesh ${meshVertices/3} triangles" else "points"} · accepted $accepted / filtered $rejected")
+                    report("3D · $count voxels · ${if (showMesh) "TSDF mesh ${meshVertices/3} triangles" else "points"} · accepted $accepted / filtered $rejected")
                     lastReport = now
                 }
             } catch (e: Exception) {
