@@ -212,7 +212,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    override fun onDestroy() { session?.close(); super.onDestroy() }
+    override fun onDestroy() { session?.close(); renderer?.shutdown(); super.onDestroy() }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -243,8 +243,14 @@ class MainActivity : Activity() {
         private val vertices = ByteBuffer.allocateDirect(240000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
-        private val maxPoints = 2400000
+        private val maxPoints = 600000
+        private val meshExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        @Volatile private var pendingMesh: FloatArray? = null
+        @Volatile private var meshBusy = false
+        private var lastPointUpdate = 0L
+        private var displayedPoints = 0
         fun snapshot(): List<FloatArray> = voxels.values.map { it.copyOf() }
+        fun shutdown() { meshExecutor.shutdownNow() }
         private var accepted = 0
         private var rejected = 0
         private var origin: FloatArray? = null
@@ -306,17 +312,17 @@ class MainActivity : Activity() {
                                 for (x in 2 until depth.width - 2 step 2) {
                                     val offset = y * plane.rowStride + x * plane.pixelStride
                                     val mm = bytes.getShort(offset).toInt() and 0xffff
-                                    if (mm < 200 || mm > 5000) { rejected++; continue }
+                                    if (mm < 250 || mm > 4500) { rejected++; continue }
                                     var consistent = 0
                                     for ((dx, dy) in arrayOf(-2 to 0, 2 to 0, 0 to -2, 0 to 2)) {
                                         val offset2 = (y + dy) * plane.rowStride + (x + dx) * plane.pixelStride
                                         val neighbor = bytes.getShort(offset2).toInt() and 0xffff
                                         if (neighbor in 200..5000 && abs(neighbor - mm) <= 150) consistent++
                                     }
-                                    if (consistent < 2) { rejected++; continue }
+                                    if (consistent < (if (mm > 2500) 3 else 2)) { rejected++; continue }
                                     if (confidencePlane != null && confidenceBuffer != null) {
                                         val ci = y * confidencePlane.rowStride + x * confidencePlane.pixelStride
-                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < 120) {
+                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < (if (mm > 2500) 170 else 130)) {
                                             rejected++; continue
                                         }
                                     }
@@ -336,10 +342,12 @@ class MainActivity : Activity() {
                                     if (old == null) {
                                         voxels[key] = floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2], 1f)
                                     } else {
-                                        val n = old[6].coerceAtMost(12f)
-                                        val alpha = 1f / (n + 1f)
+                                        val n = old[6].coerceAtMost(24f)
+                                        val dx = xx-old[0]; val dy = yy-old[1]; val dz = zz-old[2]
+                                        if (dx*dx+dy*dy+dz*dz > 0.003025f) { rejected++; continue }
+                                        val alpha = (consistent / 4f).coerceIn(0.5f,1f) / (n + 1f)
                                         for (j in 0..5) old[j] += (floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2])[j] - old[j]) * alpha
-                                        old[6] = (n + 1f).coerceAtMost(12f)
+                                        old[6] = (n + 1f).coerceAtMost(24f)
                                     }
                                 }
                             }
@@ -347,20 +355,36 @@ class MainActivity : Activity() {
                     }
                 }
                 val meshNow = System.currentTimeMillis()
-                if (showMesh && meshNow - lastMeshUpdate > 1800) {
-                    val data = SurfaceMesh.liveTriangles(voxels.values.toList())
-                    meshBuffer.clear()
-                    meshBuffer.put(data)
-                    meshVertices = data.size / 6
+                if (showMesh && !meshBusy && meshNow - lastMeshUpdate > 2500) {
                     lastMeshUpdate = meshNow
+                    meshBusy = true
+                    val sample = ArrayList<FloatArray>()
+                    val stride = (voxels.size / 150000).coerceAtLeast(1)
+                    var i = 0
+                    for (p in voxels.values) if (i++ % stride == 0) sample.add(p.copyOf())
+                    meshExecutor.execute {
+                        try { pendingMesh = SurfaceMesh.liveTriangles(sample) }
+                        finally { meshBusy = false }
+                    }
                 }
-                vertices.clear()
-                val renderStride = (voxels.size / 240000).coerceAtLeast(1)
-                var renderIndex = 0
-                for (p in voxels.values) {
-                    if (renderIndex++ % renderStride == 0 && vertices.remaining() >= 6) vertices.put(p, 0, 6)
+                val completed = pendingMesh
+                if (completed != null) {
+                    pendingMesh = null
+                    meshBuffer.clear()
+                    meshBuffer.put(completed)
+                    meshVertices = completed.size / 6
                 }
-                val count = vertices.position() / 6
+                if (meshNow - lastPointUpdate > 300 || !showMesh) {
+                    vertices.clear()
+                    val stride = (voxels.size / 200000).coerceAtLeast(1)
+                    var index = 0
+                    for (p in voxels.values) {
+                        if (index++ % stride == 0 && vertices.remaining() >= 6 && p[6] >= 1.5f) vertices.put(p, 0, 6)
+                    }
+                    displayedPoints = vertices.position() / 6
+                    lastPointUpdate = meshNow
+                }
+                val count = displayedPoints
                 if (count > 0 && frameNumber % 45 == 0) {
                     var minX = Float.POSITIVE_INFINITY; var maxX = Float.NEGATIVE_INFINITY
                     var minY = Float.POSITIVE_INFINITY; var maxY = Float.NEGATIVE_INFINITY
@@ -376,7 +400,7 @@ class MainActivity : Activity() {
                     centerZ += (tz - centerZ) * 0.12f
                 }
                 if (count > 0) {
-                    vertices.flip()
+                    vertices.position(0)
                     Matrix.perspectiveM(projection, 0, 60f, width.toFloat()/height, 0.05f, 100f)
                     val a = Math.toRadians(yaw.toDouble())
                     val b = Math.toRadians(pitch.toDouble())
