@@ -337,11 +337,11 @@ class MainActivity : Activity() {
                                     val iz = floor(zz / 0.025f).toInt()
                                     val key = ((ix.toLong() and 0x1fffffL) shl 42) or
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
-                                    val rgb = sampleYuv(color, local, focal, principal, dims)
+                                    val rgb = sampleYuv(if (color != null && kotlin.math.abs(color.timestamp - depth.timestamp) < 50000000L) color else null, local, focal, principal, dims)
                                     accepted++
                                     // Sparse TSDF fusion on a reduced sampling grid to bound CPU work.
                                     if (x % 4 == 0 && y % 4 == 0) {
-                                        val conf = if (confidencePlane != null && confidenceBuffer != null)
+                                        val conf = if (confidencePlane != null && confidenceBuffer != null && y * confidencePlane.rowStride + x * confidencePlane.pixelStride < confidenceBuffer.limit())
                                             ((confidenceBuffer.get(y * confidencePlane.rowStride + x * confidencePlane.pixelStride).toInt() and 255) / 255f)
                                         else 0.65f
                                         tsdf.integrate(cameraOrigin, floatArrayOf(xx,yy,zz), rgb, conf)
