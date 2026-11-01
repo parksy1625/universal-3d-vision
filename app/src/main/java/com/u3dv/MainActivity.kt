@@ -240,11 +240,11 @@ class MainActivity : Activity() {
         private val projection = FloatArray(16)
         private val view = FloatArray(16)
         private val mvp = FloatArray(16)
-        private val vertices = ByteBuffer.allocateDirect(240000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        private val vertices = ByteBuffer.allocateDirect(300000 * 6 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         // Quantized global voxel map, bounded to avoid unlimited memory use.
         private val voxels = LinkedHashMap<Long, FloatArray>()
         private val tsdf = TsdfVolume()
-        private val maxPoints = 600000
+        private val maxPoints = 1200000
         private val meshExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
         @Volatile private var pendingMesh: FloatArray? = null
         @Volatile private var meshBusy = false
@@ -286,7 +286,7 @@ class MainActivity : Activity() {
                 if (camera.trackingState != TrackingState.TRACKING) return
                 frameNumber++
                 // Capture at a lower cadence to keep GPU rendering responsive.
-                if (frameNumber % 3 == 0) {
+                if (frameNumber % 2 == 0) {
                     val depth = try { frame.acquireRawDepthImage16Bits() } catch (_: Exception) { null }
                     if (depth != null) {
                         val color = try { frame.acquireCameraImage() } catch (_: Exception) { null }
@@ -310,8 +310,8 @@ class MainActivity : Activity() {
                             if (origin == null) origin = pose.translation.clone()
                             val base = origin!!
                             val cameraOrigin = floatArrayOf(pose.tx()-base[0], pose.ty()-base[1], pose.tz()-base[2])
-                            for (y in 2 until depth.height - 2 step 2) {
-                                for (x in 2 until depth.width - 2 step 2) {
+                            for (y in 2 until depth.height - 2 step 1) {
+                                for (x in 2 until depth.width - 2 step 1) {
                                     val offset = y * plane.rowStride + x * plane.pixelStride
                                     val mm = bytes.getShort(offset).toInt() and 0xffff
                                     if (mm < 250 || mm > 4500) { rejected++; continue }
@@ -340,7 +340,7 @@ class MainActivity : Activity() {
                                     val rgb = sampleYuv(if (color != null && kotlin.math.abs(color.timestamp - depth.timestamp) < 50000000L) color else null, local, focal, principal, dims)
                                     accepted++
                                     // Sparse TSDF fusion on a reduced sampling grid to bound CPU work.
-                                    if (x % 4 == 0 && y % 4 == 0) {
+                                    if (x % 3 == 0 && y % 3 == 0) {
                                         val conf = if (confidencePlane != null && confidenceBuffer != null && y * confidencePlane.rowStride + x * confidencePlane.pixelStride < confidenceBuffer.limit())
                                             ((confidenceBuffer.get(y * confidencePlane.rowStride + x * confidencePlane.pixelStride).toInt() and 255) / 255f)
                                         else 0.65f
@@ -389,10 +389,10 @@ class MainActivity : Activity() {
                 }
                 if (meshNow - lastPointUpdate > 300 || !showMesh) {
                     vertices.clear()
-                    val stride = (voxels.size / 200000).coerceAtLeast(1)
+                    val stride = ((voxels.size + 299999) / 300000).coerceAtLeast(1)
                     var index = 0
                     for (p in voxels.values) {
-                        if (index++ % stride == 0 && vertices.remaining() >= 6 && p[6] >= 1.5f) vertices.put(p, 0, 6)
+                        if (index++ % stride == 0 && vertices.remaining() >= 6 && p[6] >= 1f) vertices.put(p, 0, 6)
                     }
                     displayedPoints = vertices.position() / 6
                     lastPointUpdate = meshNow
