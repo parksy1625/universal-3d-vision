@@ -256,6 +256,9 @@ class MainActivity : Activity() {
         private var rejected = 0
         private var origin: FloatArray? = null
         private var frameNumber = 0
+        private var rgbFrames = 0
+        private var rgbMissing = 0
+        private var rgbDeltaMs = 0L
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
             GLES20.glClearColor(0.025f, 0.035f, 0.06f, 1f)
@@ -339,11 +342,15 @@ class MainActivity : Activity() {
                                     val iz = floor(zz / 0.025f).toInt()
                                     val key = ((ix.toLong() and 0x1fffffL) shl 42) or
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
-                                    val colorValid = color != null && kotlin.math.abs(color.timestamp - depth.timestamp) < 150000000L
+                                    val colorValid = color != null
+                                    if (x == 2 && y == 2) {
+                                        if (colorValid) { rgbFrames++; rgbDeltaMs = kotlin.math.abs(color!!.timestamp - depth.timestamp) / 1000000L }
+                                        else rgbMissing++
+                                    }
                                     val rgb = sampleYuv(if (colorValid) color else null, local, focal, principal, dims)
                                     accepted++
                                     // Sparse TSDF fusion on a reduced sampling grid to bound CPU work.
-                                    if (colorValid && x % 3 == 0 && y % 3 == 0) {
+                                    if (x % 3 == 0 && y % 3 == 0) {
                                         val conf = if (confidencePlane != null && confidenceBuffer != null && y * confidencePlane.rowStride + x * confidencePlane.pixelStride < confidenceBuffer.limit())
                                             ((confidenceBuffer.get(y * confidencePlane.rowStride + x * confidencePlane.pixelStride).toInt() and 255) / 255f)
                                         else 0.65f
@@ -460,7 +467,7 @@ class MainActivity : Activity() {
                               principal: FloatArray, dims: IntArray): FloatArray {
             if (image == null) return floatArrayOf(0.65f, 0.65f, 0.65f)
             val z = -local[2]
-            if (z <= 0f) return floatArrayOf(0.4f, 0.8f, 1f)
+            if (z <= 0f) return floatArrayOf(0.65f, 0.65f, 0.65f)
             val u = (local[0] / z * focal[0] + principal[0]) * image.width / dims[0]
             val v = (-local[1] / z * focal[1] + principal[1]) * image.height / dims[1]
             if (!u.isFinite() || !v.isFinite() || u < 0 || v < 0 ||
