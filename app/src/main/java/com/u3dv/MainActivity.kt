@@ -321,10 +321,12 @@ class MainActivity : Activity() {
                                         val neighbor = bytes.getShort(offset2).toInt() and 0xffff
                                         if (neighbor in 200..5000 && abs(neighbor - mm) <= 150) consistent++
                                     }
-                                    if (consistent < (if (mm > 2500) 3 else 2)) { rejected++; continue }
+                                    val minNeighbors = if (mm > 2500) 3 else 2
+                                    if (consistent < minNeighbors) { rejected++; continue }
                                     if (confidencePlane != null && confidenceBuffer != null) {
                                         val ci = y * confidencePlane.rowStride + x * confidencePlane.pixelStride
-                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < (if (mm > 2500) 170 else 130)) {
+                                        val minConfidence = if (mm > 2500) 170 else 130
+                                        if (ci >= confidenceBuffer.limit() || (confidenceBuffer.get(ci).toInt() and 255) < minConfidence) {
                                             rejected++; continue
                                         }
                                     }
