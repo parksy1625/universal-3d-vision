@@ -339,10 +339,11 @@ class MainActivity : Activity() {
                                     val iz = floor(zz / 0.025f).toInt()
                                     val key = ((ix.toLong() and 0x1fffffL) shl 42) or
                                         ((iy.toLong() and 0x1fffffL) shl 21) or (iz.toLong() and 0x1fffffL)
-                                    val rgb = sampleYuv(if (color != null && kotlin.math.abs(color.timestamp - depth.timestamp) < 50000000L) color else null, local, focal, principal, dims)
+                                    val colorValid = color != null && kotlin.math.abs(color.timestamp - depth.timestamp) < 150000000L
+                                    val rgb = sampleYuv(if (colorValid) color else null, local, focal, principal, dims)
                                     accepted++
                                     // Sparse TSDF fusion on a reduced sampling grid to bound CPU work.
-                                    if (x % 3 == 0 && y % 3 == 0) {
+                                    if (colorValid && x % 3 == 0 && y % 3 == 0) {
                                         val conf = if (confidencePlane != null && confidenceBuffer != null && y * confidencePlane.rowStride + x * confidencePlane.pixelStride < confidenceBuffer.limit())
                                             ((confidenceBuffer.get(y * confidencePlane.rowStride + x * confidencePlane.pixelStride).toInt() and 255) / 255f)
                                         else 0.65f
@@ -357,7 +358,8 @@ class MainActivity : Activity() {
                                         val dx = xx-old[0]; val dy = yy-old[1]; val dz = zz-old[2]
                                         if (dx*dx+dy*dy+dz*dz > 0.003025f) { rejected++; continue }
                                         val alpha = (consistent / 4f).coerceIn(0.5f,1f) / (n + 1f)
-                                        for (j in 0..5) old[j] += (floatArrayOf(xx, yy, zz, rgb[0], rgb[1], rgb[2])[j] - old[j]) * alpha
+                                        for (j in 0..2) old[j] += (floatArrayOf(xx, yy, zz)[j] - old[j]) * alpha
+                                        if (colorValid) for (j in 3..5) old[j] += (rgb[j-3] - old[j]) * alpha
                                         old[6] = (n + 1f).coerceAtMost(24f)
                                     }
                                 }
@@ -456,7 +458,7 @@ class MainActivity : Activity() {
         // a calibrated pinhole projection, not full lens-distortion correction.
         private fun sampleYuv(image: Image?, local: FloatArray, focal: FloatArray,
                               principal: FloatArray, dims: IntArray): FloatArray {
-            if (image == null) return floatArrayOf(0.4f, 0.8f, 1f)
+            if (image == null) return floatArrayOf(0.65f, 0.65f, 0.65f)
             val z = -local[2]
             if (z <= 0f) return floatArrayOf(0.4f, 0.8f, 1f)
             val u = (local[0] / z * focal[0] + principal[0]) * image.width / dims[0]
