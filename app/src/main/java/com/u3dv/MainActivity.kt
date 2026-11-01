@@ -259,6 +259,7 @@ class MainActivity : Activity() {
         private var rgbFrames = 0
         private var rgbMissing = 0
         private var rgbDeltaMs = 0L
+        private var rgbSampleCount = 0
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
             GLES20.glClearColor(0.025f, 0.035f, 0.06f, 1f)
@@ -366,7 +367,10 @@ class MainActivity : Activity() {
                                         if (dx*dx+dy*dy+dz*dz > 0.003025f) { rejected++; continue }
                                         val alpha = (consistent / 4f).coerceIn(0.5f,1f) / (n + 1f)
                                         for (j in 0..2) old[j] += (floatArrayOf(xx, yy, zz)[j] - old[j]) * alpha
-                                        if (colorValid) for (j in 3..5) old[j] += (rgb[j-3] - old[j]) * alpha
+                                        if (colorValid) {
+                                            val colorAlpha = (alpha * 4f).coerceAtMost(0.5f)
+                                            for (j in 3..5) old[j] += (rgb[j-3] - old[j]) * colorAlpha
+                                        }
                                         old[6] = (n + 1f).coerceAtMost(24f)
                                     }
                                 }
@@ -451,7 +455,7 @@ class MainActivity : Activity() {
                 }
                 val now = System.currentTimeMillis()
                 if (now - lastReport > 1000) {
-                    report("3D · $count voxels · ${if (showMesh) "TSDF mesh ${meshVertices/3} triangles" else "points"} · accepted $accepted / filtered $rejected")
+                    report("3D · $count points · RGB $rgbFrames / missing $rgbMissing / delta ${rgbDeltaMs}ms · accepted $accepted / filtered $rejected")
                     lastReport = now
                 }
             } catch (e: Exception) {
